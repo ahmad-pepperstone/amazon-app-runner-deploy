@@ -29,6 +29,11 @@ function getInputInt(name: string, defaultValue: number): number {
     return isNaN(result) ? defaultValue : result;
 }
 
+function getEnvironmentVariables() {
+    const json = getInput('environmentVariables', { required: false }) || "{}";
+    return JSON.parse(json);
+}
+
 async function getServiceArn(client: AppRunnerClient, serviceName: string): Promise<string | undefined> {
 
     let nextToken: string | undefined = undefined;
@@ -112,6 +117,9 @@ export async function run(): Promise<void> {
         // Memory - 2
         const memory = getInputInt('memory', 2);
 
+        // Environment variables
+        const environmentVariables = getEnvironmentVariables();
+
         // AppRunner client
         const client = new AppRunnerClient({ region: region });
 
@@ -140,7 +148,8 @@ export async function run(): Promise<void> {
                         ImageIdentifier: imageUri,
                         ImageRepositoryType: getImageType(imageUri),
                         ImageConfiguration: {
-                            Port: `${port}`
+                            Port: `${port}`,
+                            RuntimeEnvironmentVariables: environmentVariables
                         }
                     }
                 };
@@ -163,7 +172,8 @@ export async function run(): Promise<void> {
                                 Runtime: runtime,
                                 BuildCommand: buildCommand,
                                 StartCommand: startCommand,
-                                Port: `${port}`
+                                Port: `${port}`,
+                                RuntimeEnvironmentVariables: environmentVariables
                             }
                         }
                     }
@@ -175,52 +185,29 @@ export async function run(): Promise<void> {
             serviceArn = createServiceResponse.Service?.ServiceArn;
         } else {
             info(`Updating existing service ${serviceName}`);
-            const command = new UpdateServiceCommand({
-                ServiceArn: serviceArn,
-                SourceConfiguration: {}
-            });
             if (isImageBased) {
                 // Update only in case of docker registry based service
-                command.input.SourceConfiguration = {
-                    AuthenticationConfiguration: {
-                        AccessRoleArn: accessRoleArn
-                    },
-                    ImageRepository: {
-                        ImageIdentifier: imageUri,
-                        ImageRepositoryType: getImageType(imageUri),
-                        ImageConfiguration: {
-                            Port: `${port}`
-                        }
-                    }
-                }
-            } else {
-                // Source code based set source code details
-                command.input.SourceConfiguration = {
-                    AuthenticationConfiguration: {
-                        ConnectionArn: sourceConnectionArn
-                    },
-                    CodeRepository: {
-                        RepositoryUrl: repoUrl,
-                        SourceCodeVersion: {
-                            Type: "BRANCH",
-                            Value: branch
+                const updateServiceResponse = await client.send(new UpdateServiceCommand({
+                    ServiceArn: serviceArn,
+                    SourceConfiguration: {
+                        AuthenticationConfiguration: {
+                            AccessRoleArn: accessRoleArn
                         },
-                        CodeConfiguration: {
-                            ConfigurationSource: "API",
-                            CodeConfigurationValues: {
-                                Runtime: runtime,
-                                BuildCommand: buildCommand,
-                                StartCommand: startCommand,
-                                Port: `${port}`
+                        ImageRepository: {
+                            ImageIdentifier: imageUri,
+                            ImageRepositoryType: getImageType(imageUri),
+                            ImageConfiguration: {
+                                Port: `${port}`,
+                                RuntimeEnvironmentVariables: environmentVariables
                             }
                         }
                     }
-                };
+                }));
+
+                serviceId = updateServiceResponse.Service?.ServiceId;
+                info(`Service update initiated with operation ID - ${serviceId}`);
+                serviceArn = updateServiceResponse.Service?.ServiceArn;
             }
-            const updateServiceResponse = await client.send(command);
-            serviceId = updateServiceResponse.Service?.ServiceId;
-            info(`Service update initiated with operation ID - ${serviceId}`)
-            serviceArn = updateServiceResponse.Service?.ServiceArn;
         }
 
         // Set output
